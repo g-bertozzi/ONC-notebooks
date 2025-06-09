@@ -208,7 +208,6 @@ def plot_mount_temp_vs_time(start: pd.Timestamp, end: pd.Timestamp, locationCode
     ax.set_ylabel("Temperature (°C)")
     ax.set_xlim([start - pd.Timedelta(seconds=1), end + pd.Timedelta(seconds=1)])
 
-    # ✅ Show fewer x-axis labels
     ax.xaxis.set_major_locator(mdates.SecondLocator(interval=10))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
     plt.setp(ax.get_xticklabels(), rotation=30, ha='right')
@@ -289,3 +288,37 @@ def cast_and_mount_temp_plot(start: pd.Timestamp, end: pd.Timestamp, cast_df: pd
     ax.grid(True)
     plt.tight_layout()
     plt.show()
+
+
+"""
+Fetches a list of dictionaries where each dictionary represents a single property, and contains metadata that 
+describes how that property is defined, measured, and whether data is available at that location.
+"""
+
+def find_properties_by_location(locationCode: str):
+
+    params = {
+        "locationCode": locationCode,
+        #"deviceCategoryCode" : "CTD" # only consider CTD data properties
+    }
+
+    result = my_onc.getProperties(params)
+    extracted = []
+
+    for entry in result:
+        # Defensive check: make sure these keys exist
+        name = entry.get("propertyName", "")
+        code = entry.get("propertyCode", "")
+        has_data = entry.get("hasDeviceData", False)
+
+        # Optionally: filter out properties that aren't actually measured
+        if name and code:
+            extracted.append({
+                "propertyName": name,
+                "propertyCode": code,
+                "hasDeviceData": has_data
+            })
+    
+    df = pd.DataFrame(extracted)
+    print(df)
+
