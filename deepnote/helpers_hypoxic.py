@@ -5,7 +5,7 @@ import json
 from typing import List, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.ticker import MultipleLocator
+import matplotlib.ticker as ticker
 import numpy as np
 
 from functools import reduce
@@ -184,7 +184,7 @@ def rename_columns_with_units(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.rename(columns=renamed)
 
-def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None) -> None:
+def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, ytick_freq: float = None) -> None:
     """
     Plots each numeric sensor column in the DataFrame against time, 
     with line priority and unit-labeled legend entries.
@@ -227,15 +227,23 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
         else:
             ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8, zorder=1)
 
+    start_time = df["timestamp"].iloc[0]
+    end_time = df["timestamp"].iloc[-1]
+
     # Axis settings
     ax.set_xlabel("Time")
     ax.set_ylabel("Sensor Value")
-    ax.set_title(title)
+    ax.set_title(f"{title}\n"
+                 f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
+                 )
 
     # Y-axis limits
     ax.set_ylim(bottom=0)  # Always start at 0
     if ymax:
         ax.set_ylim(top=ymax)
+
+    if ytick_freq is not None:
+        ax.yaxis.set_major_locator(ticker.MultipleLocator(ytick_freq))
 
     # Grid and legend
     ax.grid(True, which="major", linestyle="--", linewidth=0.5)
