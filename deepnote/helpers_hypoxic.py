@@ -21,7 +21,7 @@ my_onc = onc.ONC(token)
 # HARDCODED: global dataframe of sensor info
 # schema: propertyCode, name, unit, deviceCategoryCode
 sensor_info = pd.DataFrame([
-    {"propertyCode": "oxygen", "name": "Dissolved Oxygen", "unit": "ml/l", "deviceCategoryCode": "OXYSENSOR", "priority"},
+    {"propertyCode": "oxygen", "name": "Dissolved Oxygen", "unit": "ml/l", "deviceCategoryCode": "OXYSENSOR"},
     {"propertyCode": "parphotonbased", "name": "PAR (Photon Based)", "unit": "µmol/m²/s", "deviceCategoryCode": "radiometer"},
     {"propertyCode": "chlorophyll", "name": "Chlorophyll", "unit": "µg/l", "deviceCategoryCode": "FLNTU"},
     {"propertyCode": "seawatertemperature", "name": "Temperature", "unit": "°C", "deviceCategoryCode": "CTD"},
@@ -31,14 +31,18 @@ sensor_info = pd.DataFrame([
 
 def find_properties_by_location(locationCode: str):
     """
+    Retrieves and prints a list of all sensor properties available at a given ONC location.
+    For each property, includes its display name, property code, and whether it has associated device data.
+
     Parameters:
-    
+        locationCode (str): The ONC location code to query (e.g., "FGPPN").
+
     Returns:
-        None
+        None: Prints a DataFrame of available properties to stdout.
     """
     params = {
         "locationCode": locationCode,
-        #"deviceCategoryCode" : "CTD" # only consider CTD data properties
+        #"deviceCategoryCode" : "CTD" 
     }
 
     result = my_onc.getProperties(params)
@@ -121,13 +125,19 @@ def get_property(start: str, end: str, locationCode: str, deviceCategoryCode: st
     return df_merged
 
 def get_dataframe(start: str, end: str, props: list[str]) -> list[pd.DataFrame]:
-    """ 
+    """
+    Retrieves ONC scalar sensor data for a list of propertyCodes (e.g., 'oxygen', 'chlorophyll', etc.)
+    over a specified time range at a fixed location (FGPPN). Each property is fetched from the appropriate
+    deviceCategoryCode as defined in the global `sensor_info` table.
+
     Parameters:
-        props: 
+        start (str): ISO 8601 formatted start time (e.g., "2021-07-15T12:00:00.000Z").
+        end (str): ISO 8601 formatted end time (e.g., "2021-07-15T12:30:00.000Z").
+        props (list[str]): A list of sensor property codes to fetch (e.g., ["oxygen", "chlorophyll"]).
 
     Returns:
-        pd.DataFrame: Dataframe of merged dataframes
-                schema: ex. timestamp, salinity, seawatertemperature, oxygen, parphotonbased, chlorophyll, turbidityntu
+        list[pd.DataFrame]: A list of individual DataFrames, each containing timestamped data
+                            for one sensor property. Schema of each DataFrame: [timestamp, {property}]
     """
     dfs = []
 
@@ -145,8 +155,19 @@ def get_dataframe(start: str, end: str, props: list[str]) -> list[pd.DataFrame]:
 
     return merged_df
 
-
 def rename_columns_with_units(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Renames sensor data columns in a DataFrame by appending their display name and unit of measure,
+    using the global `sensor_info` table for lookup. The 'timestamp' column is left unchanged.
+
+    Parameters:
+        df (pd.DataFrame): A DataFrame containing time-series sensor data. Assumes columns include
+                           propertyCodes such as 'oxygen', 'salinity', etc.
+
+    Returns:
+        pd.DataFrame: A new DataFrame with sensor columns renamed to include human-readable names and units.
+                      Example: 'oxygen' -> 'Dissolved Oxygen (ml/l)'
+    """
     renamed = {}
 
     # iterate through each column
