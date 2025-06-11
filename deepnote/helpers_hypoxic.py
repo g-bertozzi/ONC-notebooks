@@ -10,7 +10,7 @@ import numpy as np
 
 from functools import reduce
 
-#token = os.environ["TRICY_TOKEN"]
+# token = os.environ["TRICY_TOKEN"]
 from dotenv import load_dotenv
 load_dotenv()
 token = os.getenv("ONC_TOKEN")
@@ -22,12 +22,13 @@ my_onc = onc.ONC(token)
 # schema: propertyCode, name, unit, deviceCategoryCode
 sensor_info = pd.DataFrame([
     {"propertyCode": "oxygen", "name": "Dissolved Oxygen", "unit": "ml/l", "deviceCategoryCode": "OXYSENSOR"},
-    {"propertyCode": "parphotonbased", "name": "PAR (Photon Based)", "unit": "µmol/m²/s", "deviceCategoryCode": "radiometer"},
+    {"propertyCode": "parphotonbased", "name": "PAR", "unit": "µmol/m²/s", "deviceCategoryCode": "radiometer"},
     {"propertyCode": "chlorophyll", "name": "Chlorophyll", "unit": "µg/l", "deviceCategoryCode": "FLNTU"},
     {"propertyCode": "seawatertemperature", "name": "Temperature", "unit": "°C", "deviceCategoryCode": "CTD"},
     {"propertyCode": "salinity", "name": "Salinity", "unit": "psu", "deviceCategoryCode": "CTD"},
     {"propertyCode": "turbidityntu", "name": "Turbidity", "unit": "NTU", "deviceCategoryCode": "FLNTU"},
 ])
+
 
 def find_properties_by_location(locationCode: str):
     """
@@ -65,64 +66,6 @@ def find_properties_by_location(locationCode: str):
     df = pd.DataFrame(extracted)
     print(df)
 
-def get_property(start: str, end: str, locationCode: str, deviceCategoryCode: str, propertyCode: str) -> pd.DataFrame:
-    """
-    Fetches scalar data using the ONC Python SDK for a given location, device category, sensor propert(ies),
-    and time window. Returns a merged DataFrame with timestamps, sensor values, and units of measurement.
-
-    Parameters:
-        start (str): Start date in ISO 8601 format (e.g., "2023-07-11T17:00:00.000Z").
-        end (str): End date in ISO 8601 format (e.g., "2023-07-11T22:30:00.000Z").
-        locationCode (str): ONC location code (e.g., "CF341").
-        deviceCategoryCode (str): ONC device category (e.g., "CTD").
-        propertyCode(str): Comma-separated sensor types to fetch (e.g., "depth,temperature").
-
-    Returns:
-        pd.DataFrame: DataFrame containing merged sensor values with a timestamp index.
-                    schema: timestamp: datetime obj, {prop}: int
-    """
-
-    params = {
-        "locationCode": locationCode,
-        "deviceCategoryCode": deviceCategoryCode,
-        "propertyCode": propertyCode,
-        "dateFrom": start,
-        "dateTo" : end
-    }
-
-    # JSON response from ONC
-    result = my_onc.getScalardata(params)
-
-    # error handle if there is no data returned
-    if not result or "sensorData" not in result or result["sensorData"] is None or len(result["sensorData"]) == 0:
-        print(f"No data returned for devices in {deviceCategoryCode} at {locationCode} between {start} and {end}.")
-        return
-        
-    else:
-        # extract the relevant sensors from the JSON response
-        dfs = []
-
-        for sensor in result["sensorData"]:
-            # extract each sensors data fields
-            prop = sensor["propertyCode"]
-            times = sensor["data"]["sampleTimes"]
-            values = sensor["data"]["values"]
-            #unit = sensor["unitOfMeasure"]
-
-            # populate dataframe
-            df = pd.DataFrame({
-                # syntax: "label": variable
-                "timestamp": pd.to_datetime(times), # convert strings to datetime objects
-                prop: values
-            })
-            dfs.append(df)
-
-    # merge dataframes by joining on timestamp    
-    df_merged = reduce(lambda left, right: pd.merge(left, right, on="timestamp", how="outer"), dfs)
-    df_merged.sort_values("timestamp", inplace=True)
-    
-    df_merged.head()
-    return df_merged
 
 def get_dataframe(start: str, end: str, props: list[str]) -> list[pd.DataFrame]:
     """
@@ -141,19 +84,136 @@ def get_dataframe(start: str, end: str, props: list[str]) -> list[pd.DataFrame]:
     """
     dfs = []
 
-    for prop in props:
+    # iterate through each property wanted and access it's deviceCategory via global dataframe
+    for prop in props: 
         device_cat = sensor_info.set_index("propertyCode").at[prop, "deviceCategoryCode"]
+        
+        # call helper to fetch data for each property
         df = get_property(start=start, end=end, locationCode="FGPPN", deviceCategoryCode=device_cat, propertyCode=prop)
+
         if df is not None:
             dfs.append(df)
 
+    # NOTE: ERROR HANDLE if no data fetched
     if not dfs:
-        return pd.DataFrame()
+        print(f"No data returned for {props} from {start} to {end}")
+        return
     
     merged_df = reduce(lambda left, right: pd.merge(left, right, on="timestamp", how="outer"), dfs)
+
     merged_df.sort_values("timestamp", inplace=True)
 
+    print(f"{props} returned {len(merged_df)} rows")
+
     return merged_df
+
+def get_property(start: str, end: str, locationCode: str, deviceCategoryCode: str, propertyCode: str = None) -> pd.DataFrame:
+    """
+    Fetches scalar data for specified single property from specified location and device category and time window. 
+    Returns a  DataFrame with timestamps and sensor values.
+
+    Parameters:
+        start (str): Start date in ISO 8601 format (e.g., "2023-07-11T17:00:00.000Z").
+        end (str): End date in ISO 8601 format (e.g., "2023-07-11T22:30:00.000Z").
+        locationCode (str): ONC location code (e.g., "CF341").
+        deviceCategoryCode (str): ONC device category (e.g., "CTD").
+        propertyCode(str): Comma-separated sensor types to fetch (e.g., "depth,temperature").
+
+    Returns:
+        pd.DataFrame: DataFrame containing sensor values with a timestamp index.
+                    schema: timestamp: datetime obj, {prop}: int
+    """
+
+    # TODO: fix oxygen to filter for sensorCategoryCode = "oxygen_corrected"
+    #if propertyCode == "oxygen":
+
+    # TODO: optimize - presently doing ruqest fro every porpertyCode, but I think I could limit this ß
+
+    params = {
+        "locationCode": locationCode,
+        "deviceCategoryCode": deviceCategoryCode,
+        "propertyCode": propertyCode,
+        "dateFrom": start,
+        "dateTo" : end,
+        "metadata": "minimum",
+        "qualityControl": "clean",
+        "resamplePeriod": 900,
+        "resampleType": "avg"
+        }
+    
+    # print(f"Requesting {propertyCode} from {start} to {end}") # NOTE: debugging
+     
+    # JSON response from ONC
+    result = my_onc.getScalardata(params)
+
+    # NOTE: ERROR HANDLE if there is no data returned
+    if not result or "sensorData" not in result or result["sensorData"] is None or len(result["sensorData"]) == 0:
+        print(f"No data returned for devices in {deviceCategoryCode} at {locationCode} between {start} and {end}.")
+        return
+        
+    else:
+        sensor = result["sensorData"][0] # isolate sensor
+        
+        # extract sensors data fields
+        prop = sensor["propertyCode"]
+        times = sensor["data"]["sampleTimes"]
+        values = sensor["data"]["values"]
+
+        # populate dataframe
+        df = pd.DataFrame({
+            "timestamp": pd.to_datetime(times), # convert strings to datetime objects
+            prop: values
+        })
+
+        # print(f"{prop} min time: {df["timestamp"].min()}") # NOTE: debugging
+        # print(f"{prop} max time: {df["timestamp"].max()}") # NOTE: debugging
+
+    df.sort_values("timestamp", inplace=True)
+
+
+    # rolling
+
+    
+    #print(df.head()) # NOTE: debugging
+    return df
+
+def smooth_df(df: pd.DataFrame, window: int = 3) -> pd.DataFrame:
+    """
+    Applies a centered rolling average to all numeric columns in the DataFrame, 
+    excluding the 'timestamp' column. The function ensures the DataFrame is 
+    sorted by timestamp and keeps the 'timestamp' column intact for plotting.
+
+    Parameters:
+        df (pd.DataFrame): Input DataFrame with a 'timestamp' column and one or more numeric sensor columns.
+                           Schema: [timestamp: datetime64, sensor1: float, sensor2: float, ...]
+        window (int): Size of the centered rolling window (in number of rows). Default is 3.
+
+    Returns:
+        pd.DataFrame: A smoothed DataFrame with the same structure as the input, where each numeric column 
+                      is averaged using a centered rolling window. Timestamp is preserved as a column.
+                      Schema: [timestamp: datetime64, sensor1: float, sensor2: float, ...]
+    """
+    df = df.copy()
+
+    if "timestamp" in df.columns:
+        # Sort and separate timestamp
+        df = df.sort_values("timestamp").reset_index(drop=True)
+        timestamp = df["timestamp"]
+        df = df.drop(columns=["timestamp"])
+    else:
+        timestamp = None
+
+    # Smooth numeric columns only
+    df_smooth = df.select_dtypes(include='number').rolling(
+        window=window, center=True, min_periods=1
+    ).mean()
+
+    # Reattach timestamp if it was present
+    if timestamp is not None:
+        df_smooth.insert(0, "timestamp", timestamp.reset_index(drop=True))
+
+    return df_smooth
+
 
 def rename_columns_with_units(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -198,7 +258,9 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
         None
     """
     # Copy to avoid modifying original DataFrame
-    plot_df = rename_columns_with_units(df)
+    renamed_df = rename_columns_with_units(df)
+
+    plot_df = smooth_df(renamed_df)
 
     # Convert timestamp if needed and set as index
     if not pd.api.types.is_datetime64_any_dtype(plot_df["timestamp"]):
@@ -230,6 +292,7 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     start_time = df["timestamp"].iloc[0]
     end_time = df["timestamp"].iloc[-1]
 
+
     # Axis settings
     ax.set_xlabel("Time")
     ax.set_ylabel("Sensor Value")
@@ -237,17 +300,104 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
                  f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
                  )
 
-    # Y-axis limits
+    # axis limits
     ax.set_ylim(bottom=0)  # Always start at 0
     if ymax:
         ax.set_ylim(top=ymax)
+    #ax.set_xlim(left=start_time, right=end_time)
 
     if ytick_freq is not None:
         ax.yaxis.set_major_locator(ticker.MultipleLocator(ytick_freq))
+    
+    # Format x-axis ticks as: "Jul 10, 2021 13:45:00"
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y %H:%M:%S'))
+    # Rotate labels to avoid overlap
+    fig.autofmt_xdate()
 
     # Grid and legend
     ax.grid(True, which="major", linestyle="--", linewidth=0.5)
     ax.legend(title="Sensors", loc="upper right")
 
     plt.tight_layout()
+    plt.show()
+
+def subplot_each_sensor_with_oxygen(
+    df: pd.DataFrame, 
+    title_prefix: str = "Oxygen vs", 
+    ytick_freq: float = None,
+    oxygen_ytick_freq: float = None
+) -> None:
+    """
+    Creates a series of subplots where each subplot shows oxygen vs another sensor over time.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with 'timestamp' and multiple sensor columns.
+        title_prefix (str): Prefix for each subplot's title.
+        ytick_freq (float): Frequency of y-ticks on the right axis (sensor).
+        oxygen_ytick_freq (float): Frequency of y-ticks on the left axis (oxygen).
+
+    Returns:
+        None
+    """
+    # Rename columns to include units, if needed
+    plot_df = rename_columns_with_units(df)
+
+    # Convert 'timestamp' to datetime and set it as the index
+    if not pd.api.types.is_datetime64_any_dtype(plot_df["timestamp"]):
+        plot_df["timestamp"] = pd.to_datetime(plot_df["timestamp"])
+    plot_df = plot_df.set_index("timestamp")
+
+    # Identify the oxygen column
+    oxygen_col = [col for col in plot_df.columns if "oxygen" in col.lower()]
+    if not oxygen_col:
+        raise ValueError("No oxygen column found in DataFrame.")
+    oxygen_col = oxygen_col[0]
+
+    # All other columns will be plotted against oxygen
+    sensor_cols = [col for col in plot_df.columns if col != oxygen_col]
+
+    # Set up subplots — one for each sensor (excluding oxygen)
+    n = len(sensor_cols)
+    fig, axs = plt.subplots(n, 1, figsize=(14, 4 * n), sharex=True)
+    if n == 1:
+        axs = [axs]  # Ensure axs is always a list
+
+    # Loop over each sensor to generate a subplot
+    for i, col in enumerate(sensor_cols):
+        ax = axs[i]       # Left y-axis (for oxygen)
+        ax2 = ax.twinx()  # Right y-axis (for current sensor)
+
+        # Plot oxygen on the left y-axis
+        ax.plot(plot_df.index, plot_df[oxygen_col], label="Oxygen", color="tab:blue", linewidth=0.8)
+        ox_label = oxygen_col
+        ax.set_ylabel(ox_label, color="tab:blue", fontsize=11, labelpad=15)
+        ax.tick_params(axis='y', labelcolor="tab:blue", labelsize=10)
+
+        # Set custom tick spacing for oxygen if provided
+        if oxygen_ytick_freq is not None:
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(oxygen_ytick_freq))
+
+        # Plot the other sensor on the right y-axis
+        ax2.plot(plot_df.index, plot_df[col], label=col, color="tab:red", linewidth=0.8)
+        sensor_label = col
+        ax2.set_ylabel(sensor_label, color="tab:red", fontsize=11, labelpad=10)
+        ax2.tick_params(axis='y', labelcolor="tab:red", labelsize=10)
+
+        # Set custom tick spacing for sensor if provided
+        if ytick_freq is not None:
+            ax2.yaxis.set_major_locator(ticker.MultipleLocator(ytick_freq))
+
+        # Set subplot title
+        ax.set_title(f"{title_prefix} {sensor_label}", fontsize=12)
+
+        # Add gridlines for time axis
+        ax.grid(True, which="major", linestyle="--", linewidth=0.5)
+
+    # Set shared x-axis label on the last subplot
+    axs[-1].set_xlabel("Time", fontsize=11)
+
+    # Adjust spacing to ensure y-axis ticks and labels are visible
+    fig.subplots_adjust(left=0.18, right=0.88, hspace=0.4)
+
+    # Display the full plot
     plt.show()
