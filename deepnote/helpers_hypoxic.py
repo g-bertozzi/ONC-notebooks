@@ -18,7 +18,7 @@ token = os.getenv("ONC_TOKEN")
 # Create ONC client
 my_onc = onc.ONC(token)
 
-# HARDCODED: global dataframe of sensor info
+# NOTE: HARDCODED - global dataframe of sensor info
 # schema: propertyCode, name, unit, deviceCategoryCode
 sensor_info = pd.DataFrame([
     {"propertyCode": "oxygen", "name": "Dissolved Oxygen", "unit": "ml/l", "deviceCategoryCode": "OXYSENSOR"},
@@ -99,12 +99,10 @@ def get_dataframe(start: str, end: str, props: list[str]) -> list[pd.DataFrame]:
         print(f"No data returned for {props} from {start} to {end}")
         return
     
-    merged_df = reduce(lambda left, right: pd.merge(left, right, on="timestamp", how="outer"), dfs)
+    merged_df = reduce(lambda left, right: pd.merge(left, right, on="timestamp", how="outer"), dfs) # merge all the dataframes by joining on time
+    merged_df.sort_values("timestamp", inplace=True) 
 
-    merged_df.sort_values("timestamp", inplace=True)
-
-    print(f"{props} returned {len(merged_df)} rows")
-
+    # print(f"{props} returned {len(merged_df)} rows") # NOTE: debugging
     return merged_df
 
 def get_property(start: str, end: str, locationCode: str, deviceCategoryCode: str, propertyCode: str = None) -> pd.DataFrame:
@@ -137,7 +135,7 @@ def get_property(start: str, end: str, locationCode: str, deviceCategoryCode: st
         "dateTo" : end,
         "metadata": "minimum",
         "qualityControl": "clean",
-        "resamplePeriod": 900,
+        "resamplePeriod": 1800,
         "resampleType": "avg"
         }
     
@@ -169,51 +167,41 @@ def get_property(start: str, end: str, locationCode: str, deviceCategoryCode: st
         # print(f"{prop} max time: {df["timestamp"].max()}") # NOTE: debugging
 
     df.sort_values("timestamp", inplace=True)
-
-
-    # rolling
-
     
     #print(df.head()) # NOTE: debugging
     return df
 
-def smooth_df(df: pd.DataFrame, window: int = 3) -> pd.DataFrame:
+def smooth_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Applies a centered rolling average to all numeric columns in the DataFrame, 
-    excluding the 'timestamp' column. The function ensures the DataFrame is 
-    sorted by timestamp and keeps the 'timestamp' column intact for plotting.
+    Applies rolling mean smoothing and rolling z-score outlier filtering 
+    to all data (i.e. numeric) columns in the DataFrame.
 
     Parameters:
-        df (pd.DataFrame): Input DataFrame with a 'timestamp' column and one or more numeric sensor columns.
-                           Schema: [timestamp: datetime64, sensor1: float, sensor2: float, ...]
-        window (int): Size of the centered rolling window (in number of rows). Default is 3.
+        df (pd.DataFrame): Input DataFrame with 'timestamp' and sensor data.
 
     Returns:
-        pd.DataFrame: A smoothed DataFrame with the same structure as the input, where each numeric column 
-                      is averaged using a centered rolling window. Timestamp is preserved as a column.
-                      Schema: [timestamp: datetime64, sensor1: float, sensor2: float, ...]
+        pd.DataFrame: Smoothed and filtered DataFrame (same shape).
     """
-    df = df.copy()
+    window = 30
+    z_thresh = 3.0
 
-    if "timestamp" in df.columns:
-        # Sort and separate timestamp
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        timestamp = df["timestamp"]
-        df = df.drop(columns=["timestamp"])
-    else:
-        timestamp = None
+    smoothed_df = df.copy()
+    numeric_cols = smoothed_df.select_dtypes(include='number').columns.tolist()
+    if 'timestamp' in numeric_cols:
+        numeric_cols.remove('timestamp')
 
-    # Smooth numeric columns only
-    df_smooth = df.select_dtypes(include='number').rolling(
-        window=window, center=True, min_periods=1
-    ).mean()
+    for col in numeric_cols:
+        roll_mean = smoothed_df[col].rolling(window=window, center=True).mean()
+        roll_std = smoothed_df[col].rolling(window=window, center=True).std()
+        z_scores = (smoothed_df[col] - roll_mean) / roll_std
 
-    # Reattach timestamp if it was present
-    if timestamp is not None:
-        df_smooth.insert(0, "timestamp", timestamp.reset_index(drop=True))
+        # Apply filter: keep rolling mean where z-score is within threshold
+        smoothed_df[col] = roll_mean.where(z_scores.abs() < z_thresh, np.nan)
 
-    return df_smooth
+    # Interpolate missing values (or optionally: .dropna())
+    smoothed_df[numeric_cols] = smoothed_df[numeric_cols].interpolate()
 
+    return smoothed_df
 
 def rename_columns_with_units(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -257,10 +245,10 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     Returns:
         None
     """
-    # Copy to avoid modifying original DataFrame
-    renamed_df = rename_columns_with_units(df)
 
-    plot_df = smooth_df(renamed_df)
+    renamed_df = rename_columns_with_units(df) # rename columns with units
+
+    plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
 
     # Convert timestamp if needed and set as index
     if not pd.api.types.is_datetime64_any_dtype(plot_df["timestamp"]):
@@ -275,19 +263,18 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     for col in sensor_cols:
         # ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8)
 
-        # HARDCODED: plot with priority 
-        # Get base property name (remove units in parentheses)
-        base = col.lower().split(" (")[0]
+        # NOTE: HARDCODED - plot with priority 
+        base = col.lower().split(" (")[0] # Get base property name (remove units in parentheses)
 
         # Plot in order of importance
         if "oxygen" in base:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8, zorder=5)
+            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=5)
         elif "par" in base:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8, zorder=4)
+            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=4)
         elif "turbidity" in base:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8, zorder=3)
+            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=3)
         else:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8, zorder=1)
+            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=1)
 
     start_time = df["timestamp"].iloc[0]
     end_time = df["timestamp"].iloc[-1]
@@ -321,12 +308,7 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     plt.tight_layout()
     plt.show()
 
-def subplot_each_sensor_with_oxygen(
-    df: pd.DataFrame, 
-    title_prefix: str = "Oxygen vs", 
-    ytick_freq: float = None,
-    oxygen_ytick_freq: float = None
-) -> None:
+def subplot_each_sensor_with_oxygen(df: pd.DataFrame, title_prefix: str = "Oxygen vs", ytick_freq: float = None, oxygen_ytick_freq: float = None) -> None:
     """
     Creates a series of subplots where each subplot shows oxygen vs another sensor over time.
 
