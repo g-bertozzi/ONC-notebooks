@@ -6,7 +6,9 @@ from typing import List, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as ticker
+from matplotlib.ticker import MultipleLocator
 import numpy as np
+import seaborn as sns
 
 from functools import reduce
 
@@ -65,7 +67,6 @@ def find_properties_by_location(locationCode: str):
     
     df = pd.DataFrame(extracted)
     print(df)
-
 
 def get_dataframe(start: str, end: str, props: list[str]) -> list[pd.DataFrame]:
     """
@@ -182,24 +183,26 @@ def smooth_df(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: Smoothed and filtered DataFrame (same shape).
     """
-    window = 30
-    z_thresh = 3.0
+    window = 12  # Size of the rolling window for smoothing
+    z_thresh = 3.0  # Z-score threshold for outlier detection
 
-    smoothed_df = df.copy()
-    numeric_cols = smoothed_df.select_dtypes(include='number').columns.tolist()
-    if 'timestamp' in numeric_cols:
-        numeric_cols.remove('timestamp')
+    smoothed_df = df.copy()  # Work on a copy to preserve the original
+    numeric_cols = [col for col in df.columns if col != "timestamp"] # Select numeric columns only
 
+    # Apply rolling smoothing and z-score filtering to each numeric column
     for col in numeric_cols:
+        # Compute rolling mean and std deviation using centered window
         roll_mean = smoothed_df[col].rolling(window=window, center=True).mean()
         roll_std = smoothed_df[col].rolling(window=window, center=True).std()
+
+        # Calculate z-scores for detecting outliers
         z_scores = (smoothed_df[col] - roll_mean) / roll_std
 
-        # Apply filter: keep rolling mean where z-score is within threshold
+        # Replace values with rolling mean where the z-score is within the threshold; otherwise set to NaN
         smoothed_df[col] = roll_mean.where(z_scores.abs() < z_thresh, np.nan)
 
-    # Interpolate missing values (or optionally: .dropna())
-    smoothed_df[numeric_cols] = smoothed_df[numeric_cols].interpolate()
+    # Fill in missing values (NaNs) by interpolating between valid data points
+    #smoothed_df[numeric_cols] = smoothed_df[numeric_cols].interpolate()
 
     return smoothed_df
 
@@ -232,7 +235,46 @@ def rename_columns_with_units(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.rename(columns=renamed)
 
-def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, ytick_freq: float = None) -> None:
+def get_priority_zorder(sensor_name: str) -> int:
+    """
+    Assigns a plot z-order priority to specific sensor types.
+    Higher z-order means plot on top.
+
+    Parameters:
+        sensor_name (str): Name of the sensor base type (e.g., "oxygen").
+
+    Returns:
+        int: z-order value for plotting.
+    """
+    if "oxygen" in sensor_name:
+        return 5
+    elif "par" in sensor_name:
+        return 4
+    elif "turbidity" in sensor_name:
+        return 3
+    else:
+        return 1
+
+def round_data_tick_size(value):
+    """
+    Round a numeric step size to a 'clean' number: 1, 2, 5, or 10 × 10^n
+    """
+    import math
+    magnitude = 10 ** math.floor(math.log10(value))
+    residual = value / magnitude
+
+    if residual < 1.5:
+        nice = 1
+    elif residual < 3:
+        nice = 2
+    elif residual < 7:
+        nice = 5
+    else:
+        nice = 10
+
+    return nice * magnitude
+
+def plot_all_normalization(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, ytick_freq: float = None) -> None:
     """
     Plots each numeric sensor column in the DataFrame against time, 
     with line priority and unit-labeled legend entries.
@@ -245,60 +287,137 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     Returns:
         None
     """
+    # Set style for plots
+    # sns.set_style("darkgrid")
+
+    renamed_df = rename_columns_with_units(df) # rename sensor columns to include units
+    normalized_df = smooth_df(renamed_df) # rollowing window mean filter for outliers
+
+    dfs = [renamed_df, normalized_df]
+
+    # Set 'timestamp' as index (no longer a column)
+    renamed_df = renamed_df.set_index("timestamp")
+    normalized_df = normalized_df.set_index("timestamp")
+
+    # Define figure and axes for subplots
+    fig, ax = plt.subplots(figsize=(14, 20), nrows=2, ncols=1)
+
+    # Get sensor columns
+    sensor_cols = renamed_df.columns.tolist()
+    
+    # TODO: make modular for df and df scaled
+
+    ####
+    for i, df in enumerate(dfs):
+        print()
+        for col in sensor_cols:
+            # NOTE: plot with priority 
+            base = col.lower().split(" (")[0] # Get base property name (remove units in parentheses)
+            z_order = get_priority_zorder(base)
+            ax[i].plot(renamed_df.index, df[col], label=col, linewidth=1, zorder=z_order)
+
+        # Isolate times for title
+        start_time = df["timestamp"].iloc[0]
+        end_time = df["timestamp"].iloc[-1]
+
+        # Labels and title
+        ax[i].set_xlabel("Time")
+        ax[i].set_ylabel("Sensor Value")
+        ax[i].set_title(f"{title} {'Normalized' if i % 2 !=0 else''}\n"
+                    f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
+                    )
+
+        
+        # Set axis limits
+        ax[i].margins(x=0.01,y=0.01)
+        ax[i].set_ylim(top=ymax if ymax else None)
+        #ax.set_xlim(left=start_time, right=end_time)
+
+        # Set tick frequencies
+        ymin, ymax_actual = ax[i].get_ylim()
+        y_range = ymax - ymin if ymax else ymax_actual - ymin
+        raw_ytick_step = y_range / 5  # target ~5 major ticks
+        ytick_step = round_data_tick_size(raw_ytick_step)
+        ax[i].yaxis.set_major_locator(MultipleLocator(ytick_step))
+
+        x_range = (end_time - start_time).total_seconds() / (60 * 60 * 24)    
+        raw_xtick_step = x_range / 5 # Target: ~5 x-axis ticks
+        xtick_step = round_data_tick_size(raw_xtick_step)
+        ax[i].xaxis.set_major_locator(mdates.DayLocator(interval=xtick_step))
+        ax[i].xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y'))
+
+        # Grid and legend
+        ax[i].grid(True, which="major", linestyle="--", linewidth=0.5)
+        ax[i].legend(title="Sensors", loc="upper right")
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_all(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, ytick_freq: float = None, normalized: bool = True) -> None:
+    """
+    Plots each numeric sensor column in the DataFrame against time, 
+    with line priority and unit-labeled legend entries.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame with 'timestamp' and sensor columns.
+        title (str): Title of the plot.
+        ymax (float): Optional maximum y-axis value. Default shows all values.
+
+    Returns:
+        None
+    """
+    # Set style for plots
+    # sns.set_style("darkgrid")
 
     renamed_df = rename_columns_with_units(df) # rename columns with units
+    plot_df = smooth_df(renamed_df) if normalized else renamed_df # if selected normalized then do so
 
-    # TODO: move this
-    plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
-
-     # Set 'timestamp' as index
+    # Set 'timestamp' as index (no longer a column)
     plot_df = plot_df.set_index("timestamp")
 
-
+    # Define figure and axes for subplots
     fig, ax = plt.subplots(figsize=(14, 10))
 
-    # Get sensor columns (exclude timestamp)
+    # Get sensor columns
     sensor_cols = plot_df.columns.tolist()
 
     for col in sensor_cols:
         # ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8) # NOTE: plot without priority
 
-        # NOTE: HARDCODED - plot with priority 
+        # NOTE: plot with priority 
         base = col.lower().split(" (")[0] # Get base property name (remove units in parentheses)
+        z_order = get_priority_zorder(base)
+        ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=z_order)
 
-        # Plot in order of importance
-        if "oxygen" in base:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=5)
-        elif "par" in base:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=4)
-        elif "turbidity" in base:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=3)
-        else:
-            ax.plot(plot_df.index, plot_df[col], label=col, linewidth=1, zorder=1)
-
+    # Isolate times for title
     start_time = df["timestamp"].iloc[0]
     end_time = df["timestamp"].iloc[-1]
 
-    # Axis settings
+    # Labels and title
     ax.set_xlabel("Time")
     ax.set_ylabel("Sensor Value")
     ax.set_title(f"{title}\n"
                  f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
                  )
 
-    # axis limits
-    ax.set_ylim(bottom=0)  # Always start at 0
-    if ymax:
-        ax.set_ylim(top=ymax)
+    # Set axis limits and margin
+    ax.margins(x=0.01,y=0.01)
+    ax.set_ylim(top=ymax if ymax else None)
     #ax.set_xlim(left=start_time, right=end_time)
 
-    if ytick_freq is not None:
-        ax.yaxis.set_major_locator(ticker.MultipleLocator(ytick_freq))
-    
-    # Format x-axis ticks as: "Jul 10, 2021 13:45:00"
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y %H:%M:%S'))
-    # Rotate labels to avoid overlap
-    fig.autofmt_xdate()
+    # Set tick frequency
+    ymin, ymax_actual = ax.get_ylim()
+    y_range = ymax - ymin if ymax else ymax_actual - ymin
+    raw_ytick_step = y_range / 5  # target ~5 major ticks
+    ytick_step = round_data_tick_size(raw_ytick_step)
+    ax.yaxis.set_major_locator(MultipleLocator(ytick_step))
+
+    x_range = (end_time - start_time).total_seconds() / (60 * 60 * 24)    
+    raw_xtick_step = x_range / 5 # Target: ~5 x-axis ticks
+    xtick_step = round_data_tick_size(raw_xtick_step)
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=xtick_step))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y'))
+    #fig.autofmt_xdate()
 
     # Grid and legend
     ax.grid(True, which="major", linestyle="--", linewidth=0.5)
@@ -307,7 +426,7 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     plt.tight_layout()
     plt.show()
 
-def subplot_each_sensor_with_oxygen(df: pd.DataFrame, title_prefix: str = "Oxygen vs", ytick_freq: float = None, oxygen_ytick_freq: float = None) -> None:
+def subplot_all_with_oxygen(df: pd.DataFrame, title_prefix: str = "Oxygen vs", ytick_freq: float = None, oxygen_ytick_freq: float = None) -> None:
     """
     Creates a series of subplots where each subplot shows oxygen vs another sensor over time.
 
@@ -321,10 +440,10 @@ def subplot_each_sensor_with_oxygen(df: pd.DataFrame, title_prefix: str = "Oxyge
         None
     """
 
-    renamed_df = rename_columns_with_units(df) # rename columns with units
+    plot_df = rename_columns_with_units(df) # rename columns with units
 
     # TODO: move this
-    plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
+    #plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
 
     # Set 'timestamp' as index
     plot_df = plot_df.set_index("timestamp")
