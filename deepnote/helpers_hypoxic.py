@@ -274,10 +274,9 @@ def round_data_tick_size(value):
 
     return nice * magnitude
 
-def plot_all_normalization(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, ytick_freq: float = None) -> None:
+def plot_all_normalization(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None) -> None:
     """
-    Plots each numeric sensor column in the DataFrame against time, 
-    with line priority and unit-labeled legend entries.
+    Plots each numeric sensor column in the DataFrame against time, with line priority and unit-labeled legend entries, then subplots the same data but normalized.
 
     Parameters:
         df (pd.DataFrame): DataFrame with 'timestamp' and sensor columns.
@@ -323,11 +322,10 @@ def plot_all_normalization(df: pd.DataFrame, title: str = "Sensor Readings Over 
         # Labels and title
         ax[i].set_xlabel("Time")
         ax[i].set_ylabel("Sensor Value")
-        ax[i].set_title(f"{title} {'Normalized' if i % 2 !=0 else''}\n"
+        ax[i].set_title(f"{title} {'(Normalized)' if i % 2 !=0 else''}\n"
                     f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
                     )
 
-        
         # Set axis limits
         ax[i].margins(x=0.01,y=0.01)
         ax[i].set_ylim(top=ymax if ymax else None)
@@ -353,10 +351,11 @@ def plot_all_normalization(df: pd.DataFrame, title: str = "Sensor Readings Over 
     plt.tight_layout()
     plt.show()
 
-def plot_all(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, ytick_freq: float = None, normalized: bool = True) -> None:
+def plot_all(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: float = None, normalized: bool = False) -> None:
     """
     Plots each numeric sensor column in the DataFrame against time, 
     with line priority and unit-labeled legend entries.
+    Option to normalize.
 
     Parameters:
         df (pd.DataFrame): DataFrame with 'timestamp' and sensor columns.
@@ -396,10 +395,10 @@ def plot_all(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: f
     # Labels and title
     ax.set_xlabel("Time")
     ax.set_ylabel("Sensor Value")
-    ax.set_title(f"{title}\n"
-                 f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
-                 )
-
+    ax.set_title(f"{title}{' (Normalized)' if normalized else''}\n"
+            f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}"
+            )
+    
     # Set axis limits and margin
     ax.margins(x=0.01,y=0.01)
     ax.set_ylim(top=ymax if ymax else None)
@@ -426,75 +425,91 @@ def plot_all(df: pd.DataFrame, title: str = "Sensor Readings Over Time", ymax: f
     plt.tight_layout()
     plt.show()
 
-def subplot_all_with_oxygen(df: pd.DataFrame, title_prefix: str = "Oxygen vs", ytick_freq: float = None, oxygen_ytick_freq: float = None) -> None:
+def subplot_all_with_oxygen(df: pd.DataFrame, title: str = "Oxygen vs", normalized: bool = False) -> None:
     """
     Creates a series of subplots where each subplot shows oxygen vs another sensor over time.
 
     Parameters:
         df (pd.DataFrame): DataFrame with 'timestamp' and multiple sensor columns.
-        title_prefix (str): Prefix for each subplot's title.
-        ytick_freq (float): Frequency of y-ticks on the right axis (sensor).
-        oxygen_ytick_freq (float): Frequency of y-ticks on the left axis (oxygen).
+        title (str): Plot title.
+        normalized (bool): Whether to apply smoothing.
 
     Returns:
         None
     """
+    # Rename columns with units for clarity
+    renamed_df = rename_columns_with_units(df)
+    plot_df = smooth_df(renamed_df) if normalized else renamed_df
 
-    plot_df = rename_columns_with_units(df) # rename columns with units
-
-    # TODO: move this
-    #plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
-
-    # Set 'timestamp' as index
+    # Set timestamp as index
     plot_df = plot_df.set_index("timestamp")
 
-    # Identify the oxygen column
+    # Find the oxygen column
     oxygen_col = [col for col in plot_df.columns if "oxygen" in col.lower()]
     if not oxygen_col:
         raise ValueError("No column containing 'oxygen' found.")
     oxygen_col = oxygen_col[0]
 
-    # Get list of all other sensor columns
+    # Get all other sensor columns
     sensor_cols = [col for col in plot_df.columns if col != oxygen_col]
 
-    # Create subplots
+    # Set up subplots
     num_sensors = len(sensor_cols)
-    fig, axs = plt.subplots(num_sensors, 1, figsize=(12, 3 * num_sensors), sharex=True)
+    fig, axs = plt.subplots(num_sensors, 1, figsize=(14, 3.5 * num_sensors), sharex=True)
 
-    # Ensure axs is iterable
+    # If only one subplot, wrap in a list for consistent indexing
     if num_sensors == 1:
         axs = [axs]
 
-    # Plot each sensor vs oxygen
+    # Get time range
+    start_time = plot_df.index.min()
+    end_time = plot_df.index.max()
+    time_range_days = (end_time - start_time).total_seconds() / (60 * 60 * 24)
+
+    raw_xtick_step = time_range_days / 5
+    xtick_step = max(1, round_data_tick_size(raw_xtick_step))
+
+    # Plot each subplot
     for i, sensor_col in enumerate(sensor_cols):
         ax = axs[i]
         ax2 = ax.twinx()
 
+        # Oxygen on left
         ax.plot(plot_df.index, plot_df[oxygen_col], color='blue', label='Oxygen', linewidth=1)
         ax.set_ylabel('Oxygen', color='blue')
         ax.tick_params(axis='y', labelcolor='blue')
 
+        # Sensor on right
         ax2.plot(plot_df.index, plot_df[sensor_col], color='red', label=sensor_col, linewidth=1)
         ax2.set_ylabel(sensor_col, color='red')
         ax2.tick_params(axis='y', labelcolor='red')
 
+        # Titles and grid
         ax.set_title(f"Oxygen vs {sensor_col}")
         ax.grid(True, linestyle='--', linewidth=0.5)
 
-    # Shared x-axis label
+        # Apply tight margins and consistent limits
+        ax.set_xlim(start_time, end_time)
+        # ax.margins(x=0.01)
+        # ax2.margins(x=0.01)
+        ax.margins(x=0.1,y=0.1)
+        ax2.margins(x=0.1,y=0.1)
+
+        # Apply consistent x-tick formatting
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=xtick_step))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y'))
+
+    # Shared x-label
     axs[-1].set_xlabel("Timestamp")
 
-    # Format x-axis ticks as: "Jul 10, 2021 13:45:00"
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y %H:%M:%S'))
-    fig.autofmt_xdate()
+    # Overall title
+    fig.suptitle(
+        f"{title}{' (Normalized)' if normalized else ''}\n"
+        f"{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}",
+        fontsize=14
+    )
 
-    start_time = df["timestamp"].iloc[0]
-    end_time = df["timestamp"].iloc[-1]
-
-    # Add overall title
-    fig.suptitle(f"Folger Pinnacle\n{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}")
-
-    # Adjust layout to make space for suptitle
-    plt.subplots_adjust(top=0.93, hspace=0.4)
-
+    # Layout and display
+    plt.subplots_adjust(top=0.92, hspace=0.4)
+    plt.tight_layout()
     plt.show()
