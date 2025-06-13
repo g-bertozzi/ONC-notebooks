@@ -248,12 +248,12 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
 
     renamed_df = rename_columns_with_units(df) # rename columns with units
 
+    # TODO: move this
     plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
 
-    # Convert timestamp if needed and set as index
-    if not pd.api.types.is_datetime64_any_dtype(plot_df["timestamp"]):
-        plot_df["timestamp"] = pd.to_datetime(plot_df["timestamp"])
+     # Set 'timestamp' as index
     plot_df = plot_df.set_index("timestamp")
+
 
     fig, ax = plt.subplots(figsize=(14, 10))
 
@@ -261,7 +261,7 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
     sensor_cols = plot_df.columns.tolist()
 
     for col in sensor_cols:
-        # ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8)
+        # ax.plot(plot_df.index, plot_df[col], label=col, linewidth=0.8) # NOTE: plot without priority
 
         # NOTE: HARDCODED - plot with priority 
         base = col.lower().split(" (")[0] # Get base property name (remove units in parentheses)
@@ -278,7 +278,6 @@ def plot_all_sensors(df: pd.DataFrame, title: str = "Sensor Readings Over Time",
 
     start_time = df["timestamp"].iloc[0]
     end_time = df["timestamp"].iloc[-1]
-
 
     # Axis settings
     ax.set_xlabel("Time")
@@ -321,65 +320,62 @@ def subplot_each_sensor_with_oxygen(df: pd.DataFrame, title_prefix: str = "Oxyge
     Returns:
         None
     """
-    # Rename columns to include units, if needed
-    plot_df = rename_columns_with_units(df)
 
-    # Convert 'timestamp' to datetime and set it as the index
-    if not pd.api.types.is_datetime64_any_dtype(plot_df["timestamp"]):
-        plot_df["timestamp"] = pd.to_datetime(plot_df["timestamp"])
+    renamed_df = rename_columns_with_units(df) # rename columns with units
+
+    # TODO: move this
+    plot_df = smooth_df(renamed_df) # sub sample and filter for outliters
+
+    # Set 'timestamp' as index
     plot_df = plot_df.set_index("timestamp")
 
     # Identify the oxygen column
     oxygen_col = [col for col in plot_df.columns if "oxygen" in col.lower()]
     if not oxygen_col:
-        raise ValueError("No oxygen column found in DataFrame.")
+        raise ValueError("No column containing 'oxygen' found.")
     oxygen_col = oxygen_col[0]
 
-    # All other columns will be plotted against oxygen
+    # Get list of all other sensor columns
     sensor_cols = [col for col in plot_df.columns if col != oxygen_col]
 
-    # Set up subplots — one for each sensor (excluding oxygen)
-    n = len(sensor_cols)
-    fig, axs = plt.subplots(n, 1, figsize=(14, 4 * n), sharex=True)
-    if n == 1:
-        axs = [axs]  # Ensure axs is always a list
+    # Create subplots
+    num_sensors = len(sensor_cols)
+    fig, axs = plt.subplots(num_sensors, 1, figsize=(12, 3 * num_sensors), sharex=True)
 
-    # Loop over each sensor to generate a subplot
-    for i, col in enumerate(sensor_cols):
-        ax = axs[i]       # Left y-axis (for oxygen)
-        ax2 = ax.twinx()  # Right y-axis (for current sensor)
+    # Ensure axs is iterable
+    if num_sensors == 1:
+        axs = [axs]
 
-        # Plot oxygen on the left y-axis
-        ax.plot(plot_df.index, plot_df[oxygen_col], label="Oxygen", color="tab:blue", linewidth=0.8)
-        ox_label = oxygen_col
-        ax.set_ylabel(ox_label, color="tab:blue", fontsize=11, labelpad=15)
-        ax.tick_params(axis='y', labelcolor="tab:blue", labelsize=10)
+    # Plot each sensor vs oxygen
+    for i, sensor_col in enumerate(sensor_cols):
+        ax = axs[i]
+        ax2 = ax.twinx()
 
-        # Set custom tick spacing for oxygen if provided
-        if oxygen_ytick_freq is not None:
-            ax.yaxis.set_major_locator(ticker.MultipleLocator(oxygen_ytick_freq))
+        ax.plot(plot_df.index, plot_df[oxygen_col], color='blue', label='Oxygen', linewidth=1)
+        ax.set_ylabel('Oxygen', color='blue')
+        ax.tick_params(axis='y', labelcolor='blue')
 
-        # Plot the other sensor on the right y-axis
-        ax2.plot(plot_df.index, plot_df[col], label=col, color="tab:red", linewidth=0.8)
-        sensor_label = col
-        ax2.set_ylabel(sensor_label, color="tab:red", fontsize=11, labelpad=10)
-        ax2.tick_params(axis='y', labelcolor="tab:red", labelsize=10)
+        ax2.plot(plot_df.index, plot_df[sensor_col], color='red', label=sensor_col, linewidth=1)
+        ax2.set_ylabel(sensor_col, color='red')
+        ax2.tick_params(axis='y', labelcolor='red')
 
-        # Set custom tick spacing for sensor if provided
-        if ytick_freq is not None:
-            ax2.yaxis.set_major_locator(ticker.MultipleLocator(ytick_freq))
+        ax.set_title(f"Oxygen vs {sensor_col}")
+        ax.grid(True, linestyle='--', linewidth=0.5)
 
-        # Set subplot title
-        ax.set_title(f"{title_prefix} {sensor_label}", fontsize=12)
+    # Shared x-axis label
+    axs[-1].set_xlabel("Timestamp")
 
-        # Add gridlines for time axis
-        ax.grid(True, which="major", linestyle="--", linewidth=0.5)
+    # Format x-axis ticks as: "Jul 10, 2021 13:45:00"
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d, %Y %H:%M:%S'))
+    fig.autofmt_xdate()
 
-    # Set shared x-axis label on the last subplot
-    axs[-1].set_xlabel("Time", fontsize=11)
+    start_time = df["timestamp"].iloc[0]
+    end_time = df["timestamp"].iloc[-1]
 
-    # Adjust spacing to ensure y-axis ticks and labels are visible
-    fig.subplots_adjust(left=0.18, right=0.88, hspace=0.4)
+    # Add overall title
+    fig.suptitle(f"Folger Pinnacle\n{start_time.strftime('%B %d, %Y')} to {end_time.strftime('%B %d, %Y')}")
 
-    # Display the full plot
+    # Adjust layout to make space for suptitle
+    plt.subplots_adjust(top=0.93, hspace=0.4)
+
     plt.show()
